@@ -20,10 +20,7 @@ export async function POST(req) {
     const result = streamText({
       model: wrappedModel,
       messages,
-      params: {
-        temperature: 0.2,
-        maxTokens: 1000,
-      },
+     
       experimental_transform: smoothStream({
         delayInMs: 20, 
       }),

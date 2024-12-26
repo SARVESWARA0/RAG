@@ -1,14 +1,14 @@
 import { Pinecone } from '@pinecone-database/pinecone';
-import FirecrawlApp from '@mendable/firecrawl-js';
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import fs from 'fs/promises';
+import path from 'path';
 
 const config = {
     indexName: 'bit',
     dimension: 768,
     batchSize: 10,
-    namespace: 'default',
-    minChunkSize: 100,
-    maxHeaderLevel: 2
+    recordsPerNamespace: 300,
+    wordsPerChunk: 1000
 };
 
 async function initServices() {
@@ -16,270 +16,202 @@ async function initServices() {
         const pinecone = new Pinecone({
             apiKey: 'pcsk_48pNCi_7z4viPmEujayoK2jtyFKXXY5uMFR5jMaPYnANZ9GRCQvtVd77jPaT8k6kMwzd6G'
         });
-        
-        const firecrawl = new FirecrawlApp({
-            apiKey:'fc-e5714cb3fabc4f33b47f8a746d788f74'
-        });
 
         const genAI = new GoogleGenerativeAI('AIzaSyDd0ktqwKnFOfaQCU0dryXuhcnhiuybXFQ');
-        const embeddingModel = genAI.getGenerativeModel({ model: "embedding-001" });
+        const embeddingModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
+        const index = pinecone.index(config.indexName);
 
-        return { pinecone, firecrawl, embeddingModel };
+        return { pinecone, embeddingModel, index };
     } catch (error) {
         console.error("Error initializing services:", error);
         throw error;
     }
 }
 
-
-
-function splitMarkdownIntoChunks(markdownContent) {
-    const sections = [];
-    let currentHeader = '';
-    let currentContent = [];
-    let currentLevel = 0;
-    let headersStack = [];
-
-    const lines = markdownContent.split('\n');
-    for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        const headerMatch = line.match(/^(#{1,6})\s+(.*)$/);
-
-        if (headerMatch) {
-            const headerLevel = headerMatch[1].length;
-            const headerText = headerMatch[2];
-            
-            if (headerLevel <= config.maxHeaderLevel) {
-                // Save previous section if it exists
-                if (currentContent.length > 0) {
-                    const content = currentContent.join('\n').trim();
-                    if (content.length >= config.minChunkSize) {
-                        sections.push({
-                            header: headerText,
-                            content: content,
-                            level: currentLevel,
-                            headers: [...headersStack]
-                        });
-                    }
-                }
-
-                
-                while (headersStack.length >= headerLevel) {
-                    headersStack.pop();
-                }
-                headersStack.push(headerText);
-
-                currentHeader = headerText;
-                currentContent = [];
-                currentLevel = headerLevel;
-            }
-        } else if (line !== '') {
-            if (!line.startsWith('---') && 
-                !line.startsWith('===') && 
-                !line.match(/^\[.*\]:/) && 
-                !line.match(/^!\[.*\]/)
-            ) {
-                currentContent.push(line);
-            }
-        }
+function splitTextIntoChunks(text) {
+    if (!text || text.trim().length === 0) {
+        console.log("Received empty or whitespace-only text");
+        return [];
     }
 
-  
-    if (currentContent.length > 0) {
-        const content = currentContent.join('\n').trim();
-        if (content.length >= config.minChunkSize) {
-            sections.push({
-                header: currentHeader || 'Conclusion',
-                content: content,
-                level: currentLevel,
-                headers: [...headersStack]
+    const words = text.split(/\s+/).filter(word => word.length > 0);
+    const chunks = [];
+    
+    for (let i = 0; i < words.length; i += config.wordsPerChunk) {
+        const chunk = words.slice(i, i + config.wordsPerChunk).join(' ');
+        if (chunk.trim().length > 0) {
+            chunks.push({
+                content: chunk,
+                wordCount: chunk.split(/\s+/).length
             });
         }
     }
-
     
-    const enrichedSections = buildHeaderHierarchy(sections);
-
-    console.log(`Generated ${enrichedSections.length} markdown sections`);
-    if (enrichedSections.length > 0) {
-        console.log('First section preview:', {
-            fullHeaderPath: enrichedSections[0].fullHeaderPath,
-            contentPreview: enrichedSections[0].content.substring(0, 100) + '...',
-            level: enrichedSections[0].level
-        });
-    }
-
-    return enrichedSections;
+    return chunks;
 }
 
-async function crawlPage(url, firecrawl) {
+async function readAndProcessFile(filePath) {
     try {
-        console.log('Starting crawl for:', url);
-        const crawlResponse = await firecrawl.crawlUrl(url, {
-            limit: 100,
-            scrapeOptions: {
-                formats: ['markdown']
-            }
-        });
-
-        if (!crawlResponse.success) {
-            throw new Error(`Failed to crawl: ${crawlResponse.error}`);
-        }
-
-        let markdownContent = '';
-        if (Array.isArray(crawlResponse.data)) {
-            markdownContent = crawlResponse.data
-                .map(item => item.markdown || '')
-                .join('\n\n');
-        } else if (typeof crawlResponse.data === 'string') {
-            markdownContent = crawlResponse.data;
-        } else if (crawlResponse.data?.markdown) {
-            markdownContent = crawlResponse.data.markdown;
-        }
-
-        const structuredChunks = splitMarkdownIntoChunks(markdownContent);
+        const content = await fs.readFile(filePath, 'utf8');
         
-        if (structuredChunks.length === 0) {
-            throw new Error('No valid content chunks were generated from the page');
+        if (!content || content.trim().length === 0) {
+            throw new Error('File is empty or contains only whitespace');
         }
 
-        return structuredChunks;
-
+        return splitTextIntoChunks(content);
     } catch (error) {
-        console.error(`Error crawling ${url}:`, error);
+        console.error(`Error processing file ${filePath}:`, error);
         throw error;
     }
 }
 
 async function generateEmbeddings(chunks, embeddingModel) {
-    const embeddings = [];
-    for (const chunk of chunks) {
-        try {
-            
-            const textToEmbed = `${chunk.fullHeaderPath}\n\n${chunk.content}`;
-            const result = await embeddingModel.embedContent(textToEmbed);
-            embeddings.push(result.embedding.values);
-        } catch (error) {
-            console.error("Error generating embedding:", error);
-            throw error;
-        }
-    }
-    
-    return embeddings;
-}
-
-async function processAndUpsert(chunks, url, pinecone, index, embeddingModel) {
     try {
-        if (!chunks || chunks.length === 0) {
-            throw new Error('No chunks provided for processing');
+        const embeddings = [];
+        // Process chunks in parallel with a concurrency limit
+        const batchSize = 5; // Adjust based on API limits
+        for (let i = 0; i < chunks.length; i += batchSize) {
+            const batch = chunks.slice(i, i + batchSize);
+            const promises = batch.map(chunk => 
+                embeddingModel.embedContent(chunk.content)
+                    .then(result => ({
+                        embedding: result.embedding.values,
+                        content: chunk.content,
+                        wordCount: chunk.wordCount
+                    }))
+            );
+            const results = await Promise.all(promises);
+            embeddings.push(...results);
         }
-
-        console.log(`Processing ${chunks.length} chunks for embedding`);
-        
-        
-        const embeddings = await generateEmbeddings(chunks, embeddingModel);
-
-        const records = chunks.map((chunk, i) => ({
-            id: `${url.replace(/[^a-zA-Z0-9]/g, '_')}_chunk_${i}`,
-            values: embeddings[i],
-            metadata: {
-                url,
-                header: chunk.header || '',
-                fullHeaderPath: chunk.fullHeaderPath || '',
-                parentHeader: chunk.parentHeader || '', 
-                headerLevel: chunk.level || 0,
-                content: chunk.content || '',
-                timestamp: new Date().toISOString()
-            }
-        }));
-
-        
-        records.forEach(record => {
-            
-            Object.keys(record.metadata).forEach(key => {
-                if (record.metadata[key] === null || record.metadata[key] === undefined) {
-                    record.metadata[key] = ''; 
-                }
-            });
-        });
-
-        for (let i = 0; i < records.length; i += config.batchSize) {
-            const batch = records.slice(i, i + config.batchSize);
-            console.log(`Upserting batch ${i / config.batchSize + 1} of ${Math.ceil(records.length / config.batchSize)}...`);
-            await index.namespace(config.namespace).upsert(batch);
-        }
-
-        console.log(`Completed processing ${url}`);
-        return records.length;
+        return embeddings;
     } catch (error) {
-        console.error("Error in processAndUpsert:", error);
+        console.error("Error in batch embedding generation:", error);
         throw error;
     }
 }
 
-function buildHeaderHierarchy(sections) {
-    const hierarchy = [];
-    const headerStack = [];
-
-    for (const section of sections) {
-        const currentLevel = section.level;
-
-        while (
-            headerStack.length > 0 && 
-            headerStack[headerStack.length - 1].level >= currentLevel
-        ) {
-            headerStack.pop();
-        }
-
-        const parentHeaders = headerStack.map(h => h.header).join(' > ');
-        const fullHeader = parentHeaders 
-            ? `${parentHeaders} > ${section.header}`
-            : section.header || ''; 
-        const enrichedSection = {
-            ...section,
-            fullHeaderPath: fullHeader,
-            parentHeader: parentHeaders || ''  
-        };
-
-        hierarchy.push(enrichedSection);
-        headerStack.push({
-            header: section.header || '',
-            level: currentLevel
+async function getCurrentNamespaceCount(index, namespace) {
+    try {
+        const stats = await index.describeIndexStats({
+            filter: { namespace: namespace }
         });
+        return stats.namespaces[namespace]?.recordCount || 0;
+    } catch (error) {
+        console.error(`Error getting namespace count:`, error);
+        return 0;
     }
-
-    return hierarchy;
 }
 
+async function getNextNamespace(index, baseNamespace = 'default') {
+    let namespaceIndex = 1;
+    let currentNamespace = baseNamespace;
+    
+    while (true) {
+        const count = await getCurrentNamespaceCount(index, currentNamespace);
+        
+        if (count < config.recordsPerNamespace) {
+            return { namespace: currentNamespace, currentCount: count };
+        }
+        
+        namespaceIndex++;
+        currentNamespace = `${baseNamespace}_${namespaceIndex}`;
+    }
+}
 
+async function processAndUpsert(chunks, fileName, index, embeddingModel) {
+    const results = new Map();
+    const embeddingsWithMetadata = await generateEmbeddings(chunks, embeddingModel);
+    let currentBatch = [];
+    let currentNamespaceInfo = await getNextNamespace(index);
+    let processedCount = 0;
+    
+    console.log(`Starting with namespace: ${currentNamespaceInfo.namespace}`);
+    
+    for (const embedData of embeddingsWithMetadata) {
+        // Check if current namespace is full
+        if (currentNamespaceInfo.currentCount >= config.recordsPerNamespace) {
+            // Process remaining batch if any
+            if (currentBatch.length > 0) {
+                await index.namespace(currentNamespaceInfo.namespace).upsert(currentBatch);
+            }
+            
+            // Get next namespace
+            currentNamespaceInfo = await getNextNamespace(index);
+            currentBatch = [];
+            console.log(`Switching to namespace: ${currentNamespaceInfo.namespace}`);
+        }
 
+        const record = {
+            id: `${fileName.replace(/[^a-zA-Z0-9]/g, '_')}_chunk_${processedCount}`,
+            values: embedData.embedding,
+            metadata: {
+                fileName,
+                content: embedData.content,
+                wordCount: embedData.wordCount,
+                namespace: currentNamespaceInfo.namespace,
+                timestamp: new Date().toISOString()
+            }
+        };
+
+        currentBatch.push(record);
+        currentNamespaceInfo.currentCount++;
+        processedCount++;
+
+        // Track results
+        if (!results.has(currentNamespaceInfo.namespace)) {
+            results.set(currentNamespaceInfo.namespace, 0);
+        }
+        results.set(
+            currentNamespaceInfo.namespace, 
+            results.get(currentNamespaceInfo.namespace) + 1
+        );
+
+        // Process batch if it reaches the batch size
+        if (currentBatch.length >= config.batchSize) {
+            try {
+                await index.namespace(currentNamespaceInfo.namespace).upsert(currentBatch);
+                console.log(`Processed batch of ${currentBatch.length} records in namespace ${currentNamespaceInfo.namespace}`);
+                currentBatch = [];
+            } catch (error) {
+                console.error(`Error upserting batch to namespace ${currentNamespaceInfo.namespace}:`, error);
+                throw error;
+            }
+        }
+    }
+
+    // Process any remaining records in the last batch
+    if (currentBatch.length > 0) {
+        try {
+            await index.namespace(currentNamespaceInfo.namespace).upsert(currentBatch);
+            console.log(`Processed final batch of ${currentBatch.length} records in namespace ${currentNamespaceInfo.namespace}`);
+        } catch (error) {
+            console.error(`Error upserting final batch to namespace ${currentNamespaceInfo.namespace}:`, error);
+            throw error;
+        }
+    }
+
+    return results;
+}
 
 async function main() {
     try {
-        const { pinecone, firecrawl, embeddingModel } = await initServices();
-
-        const urls = [
-            'https://www.bitsathy.ac.in/achievements/'
-        ];
-
-        const index = pinecone.index(config.indexName);
+        const { pinecone, embeddingModel, index } = await initServices();
         
-        for (const url of urls) {
-            console.log(`\nProcessing ${url}...`);
-            try {
-                const chunks = await crawlPage(url, firecrawl);
-                console.log(`Found ${chunks.length} content sections`);
-                const processedCount = await processAndUpsert(chunks, url, pinecone, index, embeddingModel);
-                console.log(`Successfully processed ${processedCount} chunks from ${url}`);
-            } catch (error) {
-                console.error(`Error processing ${url}:`, error);
-                continue;
-            }
+        const filePath = './data.txt';
+        const fileName = path.basename(filePath);
+        
+        console.log(`\nProcessing file: ${filePath}`);
+        
+        const chunks = await readAndProcessFile(filePath);
+        const results = await processAndUpsert(chunks, fileName, index, embeddingModel);
+        
+        console.log('\nProcessing results:');
+        for (const [namespace, count] of results.entries()) {
+            console.log(`${namespace}: ${count} chunks processed`);
         }
 
-        console.log('\nVerifying index stats...');
         const stats = await index.describeIndexStats();
-        console.log('Final index stats:', JSON.stringify(stats, null, 2));
+        console.log('\nFinal index stats:', JSON.stringify(stats, null, 2));
 
     } catch (error) {
         console.error('Error in main process:', error);
@@ -298,7 +230,7 @@ if (import.meta.url === new URL(import.meta.url).href) {
 
 export {
     initServices,
-    crawlPage,
+    readAndProcessFile,
     processAndUpsert,
     main
 };

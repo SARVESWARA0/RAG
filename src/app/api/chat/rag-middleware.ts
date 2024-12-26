@@ -206,9 +206,7 @@ export class PineconeMiddleware {
                 model: google('gemini-2.0-flash-exp'),
                 prompt: userQuery,
                 system: systemPrompt,
-                temperature: 0.7, 
-                maxTokens: 1000, 
-                topP: 0.9, 
+                topP: 0.7, 
               });
               
               if (!result || !result.text) {
