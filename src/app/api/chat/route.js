@@ -3,7 +3,7 @@ import { experimental_wrapLanguageModel as wrapLanguageModel, streamText,smoothS
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 
 const google = createGoogleGenerativeAI({
-  apiKey: process.env.GOOGLE_API_KEY
+  apiKey:'AIzaSyDd0ktqwKnFOfaQCU0dryXuhcnhiuybXFQ'
 });
 
 

@@ -42,7 +42,7 @@ export class PineconeMiddleware {
 
       this.index = this.pinecone.index(this.options.indexName, this.options.indexHost);
       
-      const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+      const genAI = new GoogleGenerativeAI('AIzaSyDd0ktqwKnFOfaQCU0dryXuhcnhiuybXFQ');
       this.embedModel = genAI.getGenerativeModel({ model: "text-embedding-004" });
     }
   }
