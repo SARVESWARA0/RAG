@@ -68,8 +68,7 @@ async function readAndProcessFile(filePath) {
 async function generateEmbeddings(chunks, embeddingModel) {
     try {
         const embeddings = [];
-        // Process chunks in parallel with a concurrency limit
-        const batchSize = 5; // Adjust based on API limits
+        const batchSize = 5; 
         for (let i = 0; i < chunks.length; i += batchSize) {
             const batch = chunks.slice(i, i + batchSize);
             const promises = batch.map(chunk => 
@@ -128,14 +127,13 @@ async function processAndUpsert(chunks, fileName, index, embeddingModel) {
     console.log(`Starting with namespace: ${currentNamespaceInfo.namespace}`);
     
     for (const embedData of embeddingsWithMetadata) {
-        // Check if current namespace is full
+   
         if (currentNamespaceInfo.currentCount >= config.recordsPerNamespace) {
-            // Process remaining batch if any
+           
             if (currentBatch.length > 0) {
                 await index.namespace(currentNamespaceInfo.namespace).upsert(currentBatch);
             }
             
-            // Get next namespace
             currentNamespaceInfo = await getNextNamespace(index);
             currentBatch = [];
             console.log(`Switching to namespace: ${currentNamespaceInfo.namespace}`);
@@ -166,7 +164,6 @@ async function processAndUpsert(chunks, fileName, index, embeddingModel) {
             results.get(currentNamespaceInfo.namespace) + 1
         );
 
-        // Process batch if it reaches the batch size
         if (currentBatch.length >= config.batchSize) {
             try {
                 await index.namespace(currentNamespaceInfo.namespace).upsert(currentBatch);
@@ -179,7 +176,6 @@ async function processAndUpsert(chunks, fileName, index, embeddingModel) {
         }
     }
 
-    // Process any remaining records in the last batch
     if (currentBatch.length > 0) {
         try {
             await index.namespace(currentNamespaceInfo.namespace).upsert(currentBatch);

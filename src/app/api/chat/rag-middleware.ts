@@ -42,7 +42,7 @@ export class PineconeMiddleware {
 
     if (!this.pinecone) {
       this.pinecone = new Pinecone({
-        apiKey: process.env.PINECONE_API_KEY,
+        apiKey: 'pcsk_48pNCi_7z4viPmEujayoK2jtyFKXXY5uMFR5jMaPYnANZ9GRCQvtVd77jPaT8k6kMwzd6G',
       });
 
       this.index = this.pinecone.index(this.options.indexName, this.options.indexHost);
