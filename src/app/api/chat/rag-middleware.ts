@@ -194,7 +194,7 @@ export class PineconeMiddleware {
           async start(controller) {
             try {
               const google = createGoogleGenerativeAI({
-                apiKey: process.env.GOOGLE_API_KEY
+                apiKey: 'AIzaSyDd0ktqwKnFOfaQCU0dryXuhcnhiuybXFQ'
               });
               
               const result = await generateText({
