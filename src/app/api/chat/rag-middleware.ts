@@ -33,12 +33,7 @@ export class PineconeMiddleware {
   }
 
   async initialize() {
-    if (!process.env.PINECONE_API_KEY) {
-      throw new Error('PINECONE_API_KEY is not set');
-    }
-    if (!process.env.GOOGLE_API_KEY) {
-      throw new Error('GOOGLE_API_KEY is not set');
-    }
+   
 
     if (!this.pinecone) {
       this.pinecone = new Pinecone({
